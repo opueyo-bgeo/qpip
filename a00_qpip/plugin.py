@@ -377,25 +377,25 @@ class Plugin:
 
             name_version = dist_info[: -len(".dist-info")]
             package_name, present_version = name_version.rsplit("-", 1)
-            package_key = package_name.replace("-", "_").lower()
+            package_key = canonicalize_name(package_name)
 
             matching_reqs = [
                 req
                 for req in reqs
-                if req.name.replace("-", "_").lower() == package_key
+                if canonicalize_name(req.name) == package_key
             ]
             if not matching_reqs:
                 continue
 
             already_installed = True
-            req = matching_reqs[0]
 
-            # If installed version does not satisfy the requirement, remove it so pip can reinstall
-            if req.specifier and not req.specifier.contains(
-                present_version, prereleases=True
+            # If any matching requirement is not satisfied, remove so pip can reinstall
+            if any(
+                req.specifier
+                and not req.specifier.contains(present_version, prereleases=True)
+                for req in matching_reqs
             ):
                 shutil.rmtree(p)
-                return True
 
         return already_installed
 
