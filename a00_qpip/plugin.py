@@ -12,7 +12,6 @@ import qgis
 from packaging.markers import default_environment
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
-from packaging.version import Version
 from pyplugin_installer import installer
 from qgis.core import QgsApplication, QgsSettings
 from qgis.PyQt.QtCore import QProcess
@@ -380,9 +379,7 @@ class Plugin:
             package_key = canonicalize_name(package_name)
 
             matching_reqs = [
-                req
-                for req in reqs
-                if canonicalize_name(req.name) == package_key
+                req for req in reqs if canonicalize_name(req.name) == package_key
             ]
             if not matching_reqs:
                 continue
