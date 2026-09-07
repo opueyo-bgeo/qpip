@@ -23,11 +23,13 @@ from .ui import MainDialog
 from .utils import (
     DistributionNotFound,
     Lib,
+    PipInstallResult,
     Req,
     VersionConflict,
     icon,
     log,
     run_cmd,
+    run_pip_install,
     warn,
 )
 
@@ -203,6 +205,10 @@ class Plugin:
             if Path(str(dist._path)).parent != self.site_packages_path:
                 libs[name].qpip = False
 
+        # Normalized lookup so similar package names (lower/upper case) all resolve to the
+        # same Lib that was cataloged above, regardless of how the requirement is spelled.
+        normalized_libs = {canonicalize_name(name): lib for name, lib in libs.items()}
+
         # Checking requirements of all plugins
         needs_gui = False
         env = default_environment()
@@ -221,9 +227,13 @@ class Plugin:
                         if requirement.marker and not requirement.marker.evaluate(env):
                             continue
 
-                        try:
-                            dist = metadata.distribution(requirement.name)
-                            version = dist.metadata["Version"]
+                        norm_name = canonicalize_name(requirement.name)
+                        installed_lib = normalized_libs.get(norm_name)
+                        if (
+                            installed_lib is not None
+                            and installed_lib.installed_dist is not None
+                        ):
+                            version = installed_lib.installed_dist.metadata["Version"]
                             if (
                                 requirement.specifier
                                 and not requirement.specifier.contains(version)
@@ -234,14 +244,17 @@ class Plugin:
                                 needs_gui = True
                             else:
                                 error = None
-                        except metadata.PackageNotFoundError:
+                        else:
                             error = DistributionNotFound(
                                 f"{requirement.name} is not installed"
                             )
                             needs_gui = True
                         req = Req(plugin_name, str(requirement), error)
-                        libs[requirement.name].name = requirement.name
-                        libs[requirement.name].required_by.append(req)
+                        if installed_lib is None:
+                            installed_lib = libs[requirement.name]
+                            installed_lib.name = requirement.name
+                            normalized_libs[norm_name] = installed_lib
+                        installed_lib.required_by.append(req)
 
         dialog = MainDialog(
             libs.values(), self._check_on_startup(), self._check_on_install()
@@ -327,26 +340,26 @@ class Plugin:
 
         constraints = self.environment_constraints(reqs_to_install)
 
-        succeeded = self.run_pip_install(
+        result = self.run_constrained_pip_install(
             reqs_to_install, constraints, report_errors=not constraints
         )
-        if not succeeded and constraints:
+        if not result.ok and not result.cancelled and constraints:
             warn(
                 "Installing with the versions provided by QGIS failed. Retrying "
                 "without them, which may install libraries incompatible with QGIS."
             )
-            self.run_pip_install(reqs_to_install, [])
+            result = self.run_constrained_pip_install(reqs_to_install, [])
 
         # if the package has been installed before, prompt user to restart
-        if already_installed:
+        if result.ok and already_installed:
             self.show_restart_message()
 
-    def run_pip_install(
+    def run_constrained_pip_install(
         self, reqs_to_install, constraints: List[str], report_errors=True
-    ) -> bool:
+    ) -> PipInstallResult:
         """
         Runs pip install for the given reqs, optionally under the given
-        constraints, and returns whether it succeeded.
+        constraints, and returns whether it succeeded or was cancelled.
         """
         cmd = [
             self.python_command(),
@@ -357,6 +370,8 @@ class Plugin:
             "--target",
             str(self.prefix_path),
             "--upgrade",
+            "--progress-bar",
+            "raw",
         ]
 
         with tempfile.TemporaryDirectory(prefix="qpip-") as temp_dir:
@@ -366,9 +381,9 @@ class Plugin:
                 cmd.extend(["--constraint", str(constraints_path)])
                 log(f"Constraining install to {len(constraints)} installed versions")
 
-            return run_cmd(
+            return run_pip_install(
                 cmd,
-                f"installing {len(reqs_to_install)} requirements",
+                reqs_to_install,
                 report_errors=report_errors,
             )
 

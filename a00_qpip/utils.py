@@ -1,5 +1,6 @@
 import os
 import subprocess
+from collections import namedtuple
 from importlib.metadata import Distribution
 from subprocess import PIPE, STDOUT, Popen
 from typing import List, Union
@@ -9,6 +10,10 @@ from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QMessageBox, QProgressDialog
 from qgis.utils import iface
+
+from .install_progress import PipInstallProgressDialog
+
+PipInstallResult = namedtuple("PipInstallResult", ["ok", "cancelled"])
 
 
 def log(message):
@@ -116,3 +121,47 @@ def run_cmd(args, description="running a system command", report_errors=True) ->
         )
 
     return process.returncode == 0
+
+
+def run_pip_install(args, requirements, report_errors=True) -> PipInstallResult:
+    """Run one pip install command with per-dependency progress reporting."""
+    requirement_label = "requirement" if len(requirements) == 1 else "requirements"
+    description = f"installing {len(requirements)} {requirement_label}"
+    dialog = PipInstallProgressDialog(
+        args,
+        requirements,
+        description,
+        log_callback=log,
+        parent=iface.mainWindow(),
+    )
+    return_code, cancelled, full_output = dialog.execute()
+
+    if return_code == 0:
+        log("Command succeeded.")
+        iface.messageBar().pushMessage(
+            "Success",
+            f"{description.capitalize()} succeeded",
+            level=Qgis.Success,
+        )
+        return PipInstallResult(True, False)
+
+    if cancelled:
+        warn("Dependency installation was cancelled.")
+        iface.messageBar().pushMessage(
+            "Cancelled",
+            "Dependency installation was cancelled",
+            level=Qgis.Warning,
+        )
+        return PipInstallResult(False, True)
+
+    warn("Command failed.")
+    if report_errors:
+        message = QMessageBox(
+            QMessageBox.Icon.Warning,
+            "Command failed",
+            f"Encountered an error while {description} !",
+            parent=iface.mainWindow(),
+        )
+        message.setDetailedText(full_output)
+        message.exec()
+    return PipInstallResult(False, False)

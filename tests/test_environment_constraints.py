@@ -14,6 +14,7 @@ from unittest.mock import patch
 import pytest
 
 from a00_qpip.plugin import Plugin
+from a00_qpip.utils import PipInstallResult
 
 SYSTEM_PATH = "/usr/lib/python3/dist-packages"
 
@@ -112,29 +113,51 @@ def test_skips_unusable_distributions(plugin: Plugin):
 
 def test_install_passes_constraints_to_pip(plugin: Plugin):
     """The constraints are written to a file passed to pip."""
-    with patch("a00_qpip.plugin.run_cmd", return_value=True) as run_cmd:
-        plugin.run_pip_install(["cowsay==4.0"], ["numpy==1.24.4"])
+    with patch(
+        "a00_qpip.plugin.run_pip_install",
+        return_value=PipInstallResult(True, False),
+    ) as run_pip_install:
+        plugin.run_constrained_pip_install(["cowsay==4.0"], ["numpy==1.24.4"])
 
-    cmd = run_cmd.call_args[0][0]
+    cmd = run_pip_install.call_args[0][0]
     assert cmd[cmd.index("--constraint") + 1].endswith("constraints.txt")
 
 
 def test_install_retries_without_constraints(plugin: Plugin):
     """If pip can't resolve the constraints, the install is retried without them."""
     with patch.object(plugin, "environment_constraints", return_value=["numpy==1.0"]):
-        with patch("a00_qpip.plugin.run_cmd", return_value=False) as run_cmd:
+        with patch(
+            "a00_qpip.plugin.run_pip_install",
+            return_value=PipInstallResult(False, False),
+        ) as run_pip_install:
             plugin.pip_install_reqs(["cowsay==4.0"])
 
-    first_cmd, second_cmd = (call[0][0] for call in run_cmd.call_args_list)
+    first_cmd, second_cmd = (call[0][0] for call in run_pip_install.call_args_list)
     assert "--constraint" in first_cmd
     assert "--constraint" not in second_cmd
+
+
+def test_install_cancelled_does_not_retry_without_constraints(plugin: Plugin):
+    """If the user cancels a constrained install, do not retry without constraints."""
+    with patch.object(plugin, "environment_constraints", return_value=["numpy==1.0"]):
+        with patch(
+            "a00_qpip.plugin.run_pip_install",
+            return_value=PipInstallResult(False, True),
+        ) as run_pip_install:
+            plugin.pip_install_reqs(["cowsay==4.0"])
+
+    run_pip_install.assert_called_once()
+    assert "--constraint" in run_pip_install.call_args[0][0]
 
 
 def test_install_without_environment_reports_errors(plugin: Plugin):
     """Without constraints, pip failures are reported to the user right away."""
     with patch.object(plugin, "environment_constraints", return_value=[]):
-        with patch("a00_qpip.plugin.run_cmd", return_value=False) as run_cmd:
+        with patch(
+            "a00_qpip.plugin.run_pip_install",
+            return_value=PipInstallResult(False, False),
+        ) as run_pip_install:
             plugin.pip_install_reqs(["cowsay==4.0"])
 
-    run_cmd.assert_called_once()
-    assert run_cmd.call_args[1]["report_errors"]
+    run_pip_install.assert_called_once()
+    assert run_pip_install.call_args[1]["report_errors"]
