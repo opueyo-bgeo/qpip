@@ -371,6 +371,9 @@ class Plugin:
 
         for p in old_packages:
             dist_info = Path(p).name
+            # Only *.dist-info directories carry package name/version metadata.
+            # Anything else is ignored (qpip_installed_packages already filters
+            # to dist-info; this guard is defensive).
             if not dist_info.endswith(".dist-info"):
                 continue
 
